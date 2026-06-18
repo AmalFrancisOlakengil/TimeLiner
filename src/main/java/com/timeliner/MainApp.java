@@ -2,59 +2,58 @@ package com.timeliner;
 
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.stage.Stage;
 import javafx.scene.Scene;
-import javafx.scene.control.ScrollPane;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.VBox;
-import javafx.scene.control.Label;
+import javafx.scene.control.*;
+import javafx.scene.layout.*;
+import javafx.scene.shape.Circle;
+import javafx.scene.shape.Line;
 import atlantafx.base.theme.PrimerDark;
 
-import java.awt.*;
+import java.awt.SystemTray;
+import java.awt.TrayIcon;
+import java.awt.Image;
+import java.awt.Toolkit;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.Statement;
+import java.sql.PreparedStatement;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainApp extends Application {
 
     private static final String DB_URL = "jdbc:sqlite:timeliner.db";
+    
+    private BorderPane mainRoot;
+    private VBox timelineContainer; // Flipped to VBox for vertical stacking
+    private ScrollPane scrollPane;
 
     @Override
     public void start(Stage primaryStage) {
-        // 1. Apply AtlantaFX Sleek Theme
         Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());
-
-        // 2. Prevent application from exiting when window is hidden
         Platform.setImplicitExit(false);
-
-        // 3. Initialize Database
         initDatabase();
 
-        // 4. Build a basic mock layout for your horizontal timeline
-        ScrollPane scrollPane = new ScrollPane();
-        scrollPane.setPannable(true); // Allows click-and-drag scrolling
-        scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        mainRoot = new BorderPane();
+        mainRoot.setTop(buildNavigationBar());
+
+        scrollPane = new ScrollPane();
+        scrollPane.setPannable(true);
+        // ENABLE VERTICAL SCROLLING, DISABLE HORIZONTAL
         scrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scrollPane.setFitToWidth(true); // Forces contents to match scroll pane width cleanly
+        scrollPane.setStyle("-fx-background-color: #0d1117;");
 
-        HBox timelineCanvas = new HBox(20); // 20px spacing between cards
-        timelineCanvas.setStyle("-fx-padding: 40;");
+        showTimelinePage();
 
-        // Add dummy bands to test horizontal layout
-        for (int i = 1; i <= 10; i++) {
-            VBox eventCard = new VBox(10);
-            eventCard.setStyle("-fx-background-color: #21262d; -fx-padding: 20; -fx-background-radius: 8; -fx-min-width: 200;");
-            eventCard.getChildren().addAll(
-                new Label("Event #" + i),
-                new Label("Date: 2026-06-18"),
-                new Label("Location: Local Canvas")
-            );
-            timelineCanvas.getChildren().add(eventCard);
-        }
-        scrollPane.setContent(timelineCanvas);
-
-        Scene scene = new Scene(scrollPane, 900, 400);
+        Scene scene = new Scene(mainRoot, 1000, 650);
         
-        // Load custom CSS safely
         var cssResource = getClass().getResource("/com/timeliner/styles.css");
         if (cssResource != null) {
             scene.getStylesheets().add(cssResource.toExternalForm());
@@ -64,15 +63,252 @@ public class MainApp extends Application {
         primaryStage.setScene(scene);
         primaryStage.show();
 
-        // 5. Intercept Close Request
         primaryStage.setOnCloseRequest(event -> {
             event.consume();
             primaryStage.hide();
-            System.out.println("TimeLiner is minimized to the system tray overflow panel.");
         });
 
-        // 6. Spawn background System Tray Icon
         javax.swing.SwingUtilities.invokeLater(() -> createTrayIcon(primaryStage));
+    }
+
+    private HBox buildNavigationBar() {
+        HBox navBar = new HBox(15);
+        navBar.setStyle("-fx-background-color: #161b22; -fx-padding: 15; -fx-border-color: #30363d; -fx-border-width: 0 0 1 0;");
+        navBar.setAlignment(Pos.CENTER_LEFT);
+
+        Label logo = new Label("⏱ TimeLiner");
+        logo.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: #f0f6fc; -fx-padding: 0 20 0 0;");
+
+        Button btnTimeline = new Button("View Timeline");
+        Button btnAddEvent = new Button("Add Event");
+        
+        btnTimeline.getStyleClass().add("accent");
+        btnAddEvent.getStyleClass().add("success");
+
+        btnTimeline.setOnAction(e -> showTimelinePage());
+        btnAddEvent.setOnAction(e -> showAddEventPage());
+
+        navBar.getChildren().addAll(logo, btnTimeline, btnAddEvent);
+        return navBar;
+    }
+
+    // --- PAGE 1: Vertical Alternating Canvas View ---
+    private void showTimelinePage() {
+        StackPane canvasStack = new StackPane();
+        canvasStack.setStyle("-fx-background-color: #0d1117; -fx-padding: 50 20 50 20;");
+
+        timelineContainer = new VBox(0); // Pack directly along the spine
+        timelineContainer.setAlignment(Pos.TOP_CENTER);
+
+        List<TimelineEvent> events = loadEventsFromDb();
+
+        if (events.isEmpty()) {
+            Label noEventsLayers = new Label("No timeline data found. Go to 'Add Event' to plot milestones.");
+            noEventsLayers.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 15px;");
+            canvasStack.getChildren().add(noEventsLayers);
+            mainRoot.setCenter(canvasStack);
+            return;
+        }
+
+        // 1. Draw the continuous vertical spine right down the middle
+        double runningLineHeight = events.size() * 160.0 + 50;
+        Line axisSpine = new Line(0, 0, 0, runningLineHeight);
+        axisSpine.setStroke(javafx.scene.paint.Color.web("#30363d"));
+        axisSpine.setStrokeWidth(4);
+        
+        StackPane spineWrapper = new StackPane(axisSpine);
+        spineWrapper.setAlignment(Pos.TOP_CENTER);
+        canvasStack.getChildren().add(spineWrapper);
+
+        // 2. Populate row slots alternating left and right
+        for (int i = 0; i < events.size(); i++) {
+            TimelineEvent event = events.get(i);
+            boolean isLeftBranch = (i % 2 == 0);
+
+            // This row grid hosts: Left Content Space | Center Dot | Right Content Space
+            GridPane rowGrid = new GridPane();
+            rowGrid.setAlignment(Pos.CENTER);
+            rowGrid.setPrefHeight(160);
+
+            // Define equal 3-column structural layout weights
+            ColumnConstraints leftCol = new ColumnConstraints(350);
+            leftCol.setHalignment(javafx.geometry.HPos.RIGHT);
+            
+            ColumnConstraints centerCol = new ColumnConstraints(60);
+            centerCol.setHalignment(javafx.geometry.HPos.CENTER);
+            
+            ColumnConstraints rightCol = new ColumnConstraints(350);
+            rightCol.setHalignment(javafx.geometry.HPos.LEFT);
+            
+            rowGrid.getColumnConstraints().addAll(leftCol, centerCol, rightCol);
+
+            // Construct Card Element Box
+            VBox infoCard = new VBox(6);
+            infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 15; -fx-background-radius: 6; " +
+                              "-fx-border-color: #30363d; -fx-border-radius: 6; -fx-max-width: 260; -fx-min-width: 260;");
+            
+            Label title = new Label(event.title);
+            title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #58a6ff;");
+            title.setWrapText(true);
+
+            Label loc = new Label("📍 " + event.location);
+            loc.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 12px;");
+            loc.setWrapText(true);
+
+            Label dt = new Label("📅 " + event.date + " " + event.time);
+            dt.setStyle("-fx-text-fill: #c9d1d9; -fx-font-size: 12px;");
+
+            infoCard.getChildren().addAll(title, loc, dt);
+            if (event.reminder == 1) {
+                Label badge = new Label("🔔 Alert Active");
+                badge.setStyle("-fx-text-fill: #3fb950; -fx-font-size: 10px;");
+                infoCard.getChildren().add(badge);
+            }
+
+            // Create intersection central tracker dot
+            Circle centralDot = new Circle(6);
+            centralDot.setFill(javafx.scene.paint.Color.web("#f0f6fc"));
+            centralDot.setStroke(javafx.scene.paint.Color.web("#58a6ff"));
+            centralDot.setStrokeWidth(2);
+
+            // Connectors (horizontal stems bridging card to spine)
+            Line connectorLine = new Line(0, 0, 40, 0);
+            connectorLine.setStroke(javafx.scene.paint.Color.web("#8b949e"));
+            connectorLine.setStrokeWidth(2);
+
+            // Assemble row depending on side alternation logic
+            if (isLeftBranch) {
+                HBox leftPackage = new HBox(0, infoCard, connectorLine);
+                leftPackage.setAlignment(Pos.CENTER_RIGHT);
+                rowGrid.add(leftPackage, 0, 0); // Column 0
+            } else {
+                HBox rightPackage = new HBox(0, connectorLine, infoCard);
+                rightPackage.setAlignment(Pos.CENTER_LEFT);
+                rowGrid.add(rightPackage, 2, 0); // Column 2
+            }
+            
+            rowGrid.add(centralDot, 1, 0); // Center node dot sits at column 1 perfectly on the line
+            timelineContainer.getChildren().add(rowGrid);
+        }
+
+        canvasStack.getChildren().add(timelineContainer);
+        scrollPane.setContent(canvasStack);
+        mainRoot.setCenter(scrollPane);
+    }
+
+    // --- PAGE 2: Guarded Content Entry Panel ---
+    private void showAddEventPage() {
+        VBox formContainer = new VBox(12);
+        formContainer.setPadding(new Insets(30));
+        formContainer.setStyle("-fx-background-color: #0d1117;");
+        formContainer.setMaxWidth(460);
+
+        Label pageTitle = new Label("Add Event Block Context");
+        pageTitle.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: #f0f6fc; -fx-padding: 0 0 10 0;");
+
+        TextField txtName = new TextField();
+        txtName.setPromptText("Enter event title...");
+
+        TextField txtLocation = new TextField();
+        txtLocation.setPromptText("Enter location or link...");
+
+        DatePicker datePicker = new DatePicker();
+        datePicker.setMaxWidth(Double.MAX_VALUE);
+
+        HBox timeInputRow = new HBox(8);
+        timeInputRow.setAlignment(Pos.CENTER_LEFT);
+
+        ComboBox<String> comboHour = new ComboBox<>();
+        for (int i = 1; i <= 12; i++) comboHour.getItems().add(String.format("%02d", i));
+        comboHour.setValue("12");
+
+        ComboBox<String> comboMinute = new ComboBox<>();
+        for (int i = 0; i < 60; i++) comboMinute.getItems().add(String.format("%02d", i));
+        comboMinute.setValue("00");
+
+        ComboBox<String> comboMarker = new ComboBox<>();
+        comboMarker.getItems().addAll("AM", "PM");
+        comboMarker.setValue("PM");
+
+        timeInputRow.getChildren().addAll(
+            comboHour, new Label(":"), comboMinute, comboMarker
+        );
+
+        ToggleButton toggleReminder = new ToggleButton("Enable App Alerts");
+        toggleReminder.setMaxWidth(Double.MAX_VALUE);
+
+        Button btnSubmit = new Button("Commit to Line System Track");
+        btnSubmit.getStyleClass().add("success");
+        btnSubmit.setMaxWidth(Double.MAX_VALUE);
+        btnSubmit.setPadding(new Insets(10));
+
+        formContainer.getChildren().addAll(
+            pageTitle,
+            new Label("Event Summary Label:"), txtName,
+            new Label("Location Context:"), txtLocation,
+            new Label("Target Date:"), datePicker,
+            new Label("Target Time (HH:MM AM/PM):"), timeInputRow,
+            new Label("System Notification Options:"), toggleReminder,
+            new BorderPane(null, null, null, null, btnSubmit)
+        );
+
+        btnSubmit.setOnAction(e -> {
+            String name = txtName.getText().trim();
+            String location = txtLocation.getText().trim();
+            String date = (datePicker.getValue() != null) ? datePicker.getValue().toString() : "";
+            String compositeTime = comboHour.getValue() + ":" + comboMinute.getValue() + " " + comboMarker.getValue();
+            int reminder = toggleReminder.isSelected() ? 1 : 0;
+
+            if (name.isEmpty() || date.isEmpty()) {
+                Alert alert = new Alert(Alert.AlertType.WARNING, "Core metadata attributes cannot be empty!", ButtonType.OK);
+                alert.showAndWait();
+                return;
+            }
+
+            String sql = "INSERT INTO timeline_events(title, event_date, event_time, location, reminder) VALUES(?,?,?,?,?)";
+            try (Connection conn = DriverManager.getConnection(DB_URL);
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                
+                pstmt.setString(1, name);
+                pstmt.setString(2, date);
+                pstmt.setString(3, compositeTime);
+                pstmt.setString(4, location.isEmpty() ? "Remote Context" : location);
+                pstmt.setInt(5, reminder);
+                pstmt.executeUpdate();
+
+                showTimelinePage();
+
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        });
+
+        StackPane centerWrapper = new StackPane(formContainer);
+        centerWrapper.setStyle("-fx-background-color: #0d1117;");
+        mainRoot.setCenter(centerWrapper);
+    }
+
+    private List<TimelineEvent> loadEventsFromDb() {
+        List<TimelineEvent> list = new ArrayList<>();
+        String sql = "SELECT * FROM timeline_events ORDER BY event_date ASC, event_time ASC";
+        try (Connection conn = DriverManager.getConnection(DB_URL);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            
+            while (rs.next()) {
+                list.add(new TimelineEvent(
+                    rs.getInt("id"),
+                    rs.getString("title"),
+                    rs.getString("event_date"),
+                    rs.getString("event_time"),
+                    rs.getString("location"),
+                    rs.getInt("reminder")
+                ));
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return list;
     }
 
     private void initDatabase() {
@@ -85,7 +321,6 @@ public class MainApp extends Application {
                     "event_time TEXT," +
                     "location TEXT," +
                     "reminder INTEGER DEFAULT 0)");
-            System.out.println("SQLite database initialized successfully inside project root!");
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -95,13 +330,13 @@ public class MainApp extends Application {
         if (!SystemTray.isSupported()) return;
         try {
             SystemTray tray = SystemTray.getSystemTray();
-            Image image = Toolkit.getDefaultToolkit().createImage(new byte[0]); // fallback empty pixel image
-
-            PopupMenu popup = new PopupMenu();
-            MenuItem openItem = new MenuItem("Open TimeLiner");
+            Image image = Toolkit.getDefaultToolkit().createImage(new byte[0]);
+            java.awt.PopupMenu popup = new java.awt.PopupMenu();
+            
+            java.awt.MenuItem openItem = new java.awt.MenuItem("Open TimeLiner");
             openItem.addActionListener(e -> Platform.runLater(primaryStage::show));
             
-            MenuItem exitItem = new MenuItem("Exit Completely");
+            java.awt.MenuItem exitItem = new java.awt.MenuItem("Exit Completely");
             exitItem.addActionListener(e -> {
                 Platform.exit();
                 System.exit(0);
@@ -114,7 +349,6 @@ public class MainApp extends Application {
             TrayIcon trayIcon = new TrayIcon(image, "TimeLiner", popup);
             trayIcon.setImageAutoSize(true);
             trayIcon.addActionListener(e -> Platform.runLater(primaryStage::show));
-
             tray.add(trayIcon);
         } catch (Exception e) {
             e.printStackTrace();
@@ -123,5 +357,23 @@ public class MainApp extends Application {
 
     public static void main(String[] args) {
         launch(args);
+    }
+
+    private static class TimelineEvent {
+        int id;
+        String title;
+        String date;
+        String time;
+        String location;
+        int reminder;
+
+        TimelineEvent(int id, String title, String date, String time, String location, int reminder) {
+            this.id = id;
+            this.title = title;
+            this.date = date;
+            this.time = time;
+            this.location = location;
+            this.reminder = reminder;
+        }
     }
 }
