@@ -11,6 +11,8 @@ import javafx.scene.layout.*;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import atlantafx.base.theme.PrimerDark;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.material2.Material2AL;
 
 import java.awt.SystemTray;
 import java.awt.TrayIcon;
@@ -30,7 +32,7 @@ public class MainApp extends Application {
     private static final String DB_URL = "jdbc:sqlite:timeliner.db";
     
     private BorderPane mainRoot;
-    private VBox timelineContainer; // Flipped to VBox for vertical stacking
+    private VBox timelineContainer;
     private ScrollPane scrollPane;
 
     @Override
@@ -44,10 +46,9 @@ public class MainApp extends Application {
 
         scrollPane = new ScrollPane();
         scrollPane.setPannable(true);
-        // ENABLE VERTICAL SCROLLING, DISABLE HORIZONTAL
         scrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        scrollPane.setFitToWidth(true); // Forces contents to match scroll pane width cleanly
+        scrollPane.setFitToWidth(true);
         scrollPane.setStyle("-fx-background-color: #0d1117;");
 
         showTimelinePage();
@@ -92,12 +93,12 @@ public class MainApp extends Application {
         return navBar;
     }
 
-    // --- PAGE 1: Vertical Alternating Canvas View ---
+    // --- PAGE 1: Vertical Timeline with Edit Bindings ---
     private void showTimelinePage() {
         StackPane canvasStack = new StackPane();
         canvasStack.setStyle("-fx-background-color: #0d1117; -fx-padding: 50 20 50 20;");
 
-        timelineContainer = new VBox(0); // Pack directly along the spine
+        timelineContainer = new VBox(0);
         timelineContainer.setAlignment(Pos.TOP_CENTER);
 
         List<TimelineEvent> events = loadEventsFromDb();
@@ -110,7 +111,6 @@ public class MainApp extends Application {
             return;
         }
 
-        // 1. Draw the continuous vertical spine right down the middle
         double runningLineHeight = events.size() * 160.0 + 50;
         Line axisSpine = new Line(0, 0, 0, runningLineHeight);
         axisSpine.setStroke(javafx.scene.paint.Color.web("#30363d"));
@@ -120,17 +120,14 @@ public class MainApp extends Application {
         spineWrapper.setAlignment(Pos.TOP_CENTER);
         canvasStack.getChildren().add(spineWrapper);
 
-        // 2. Populate row slots alternating left and right
         for (int i = 0; i < events.size(); i++) {
             TimelineEvent event = events.get(i);
             boolean isLeftBranch = (i % 2 == 0);
 
-            // This row grid hosts: Left Content Space | Center Dot | Right Content Space
             GridPane rowGrid = new GridPane();
             rowGrid.setAlignment(Pos.CENTER);
             rowGrid.setPrefHeight(160);
 
-            // Define equal 3-column structural layout weights
             ColumnConstraints leftCol = new ColumnConstraints(350);
             leftCol.setHalignment(javafx.geometry.HPos.RIGHT);
             
@@ -142,15 +139,28 @@ public class MainApp extends Application {
             
             rowGrid.getColumnConstraints().addAll(leftCol, centerCol, rightCol);
 
-            // Construct Card Element Box
-            VBox infoCard = new VBox(6);
-            infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 15; -fx-background-radius: 6; " +
-                              "-fx-border-color: #30363d; -fx-border-radius: 6; -fx-max-width: 260; -fx-min-width: 260;");
+            // Construct Card Top Row Header (Title + Edit Action Button)
+            HBox cardHeader = new HBox(10);
+            cardHeader.setAlignment(Pos.TOP_LEFT);
             
             Label title = new Label(event.title);
             title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #58a6ff;");
             title.setWrapText(true);
+            HBox.setHgrow(title, Priority.ALWAYS);
 
+            // Vector Pencil Icon Button via Ikonli
+            Button btnEdit = new Button();
+            btnEdit.setGraphic(new FontIcon(Material2AL.EDIT));
+            btnEdit.getStyleClass().addAll("button-icon", "flat"); // clean frameless styling rule
+            btnEdit.setTooltip(new Tooltip("Edit Event Details"));
+            btnEdit.setOnAction(e -> showEditPopup(event));
+
+            cardHeader.getChildren().addAll(title, btnEdit);
+
+            VBox infoCard = new VBox(6);
+            infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 12 15 15 15; -fx-background-radius: 6; " +
+                              "-fx-border-color: #30363d; -fx-border-radius: 6; -fx-max-width: 260; -fx-min-width: 260;");
+            
             Label loc = new Label("📍 " + event.location);
             loc.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 12px;");
             loc.setWrapText(true);
@@ -158,36 +168,33 @@ public class MainApp extends Application {
             Label dt = new Label("📅 " + event.date + " " + event.time);
             dt.setStyle("-fx-text-fill: #c9d1d9; -fx-font-size: 12px;");
 
-            infoCard.getChildren().addAll(title, loc, dt);
+            infoCard.getChildren().addAll(cardHeader, loc, dt);
             if (event.reminder == 1) {
                 Label badge = new Label("🔔 Alert Active");
                 badge.setStyle("-fx-text-fill: #3fb950; -fx-font-size: 10px;");
                 infoCard.getChildren().add(badge);
             }
 
-            // Create intersection central tracker dot
             Circle centralDot = new Circle(6);
             centralDot.setFill(javafx.scene.paint.Color.web("#f0f6fc"));
             centralDot.setStroke(javafx.scene.paint.Color.web("#58a6ff"));
             centralDot.setStrokeWidth(2);
 
-            // Connectors (horizontal stems bridging card to spine)
             Line connectorLine = new Line(0, 0, 40, 0);
             connectorLine.setStroke(javafx.scene.paint.Color.web("#8b949e"));
             connectorLine.setStrokeWidth(2);
 
-            // Assemble row depending on side alternation logic
             if (isLeftBranch) {
                 HBox leftPackage = new HBox(0, infoCard, connectorLine);
                 leftPackage.setAlignment(Pos.CENTER_RIGHT);
-                rowGrid.add(leftPackage, 0, 0); // Column 0
+                rowGrid.add(leftPackage, 0, 0);
             } else {
                 HBox rightPackage = new HBox(0, connectorLine, infoCard);
                 rightPackage.setAlignment(Pos.CENTER_LEFT);
-                rowGrid.add(rightPackage, 2, 0); // Column 2
+                rowGrid.add(rightPackage, 2, 0);
             }
             
-            rowGrid.add(centralDot, 1, 0); // Center node dot sits at column 1 perfectly on the line
+            rowGrid.add(centralDot, 1, 0);
             timelineContainer.getChildren().add(rowGrid);
         }
 
@@ -196,7 +203,91 @@ public class MainApp extends Application {
         mainRoot.setCenter(scrollPane);
     }
 
-    // --- PAGE 2: Guarded Content Entry Panel ---
+    // --- POPUP DIALOG WINDOW MODULE ---
+    private void showEditPopup(TimelineEvent event) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Modify Event Frame");
+        dialog.setHeaderText("Edit details for: " + event.title);
+        
+        // Wire up default theme canvas buttons natively
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.SAVE, ButtonType.CANCEL);
+        dialog.getDialogPane().setStyle("-fx-background-color: #161b22;");
+
+        VBox contentGrid = new VBox(10);
+        contentGrid.setPadding(new Insets(15));
+        contentGrid.setPrefWidth(400);
+
+        TextField editName = new TextField(event.title);
+        TextField editLocation = new TextField(event.location);
+        
+        DatePicker editDatePicker = new DatePicker(java.time.LocalDate.parse(event.date));
+        editDatePicker.setMaxWidth(Double.MAX_VALUE);
+
+        // Parse previous record back into dropdown layouts naturally
+        String[] timeParts = event.time.split("[: ]"); // splits hh, mm, marker bounds
+        
+        ComboBox<String> comboHour = new ComboBox<>();
+        for (int i = 1; i <= 12; i++) comboHour.getItems().add(String.format("%02d", i));
+        comboHour.setValue(timeParts[0]);
+
+        ComboBox<String> comboMinute = new ComboBox<>();
+        for (int i = 0; i < 60; i++) comboMinute.getItems().add(String.format("%02d", i));
+        comboMinute.setValue(timeParts[1]);
+
+        ComboBox<String> comboMarker = new ComboBox<>();
+        comboMarker.getItems().addAll("AM", "PM");
+        comboMarker.setValue(timeParts[2]);
+
+        HBox timeRow = new HBox(6, comboHour, new Label(":"), comboMinute, comboMarker);
+        timeRow.setAlignment(Pos.CENTER_LEFT);
+
+        CheckBox checkReminder = new CheckBox("Enable Active Desktop Alerts");
+        checkReminder.setSelected(event.reminder == 1);
+
+        contentGrid.getChildren().addAll(
+            new Label("Update Name:"), editName,
+            new Label("Update Location:"), editLocation,
+            new Label("Change Date:"), editDatePicker,
+            new Label("Adjust Time Window:"), timeRow,
+            new Label("Notification Actions:"), checkReminder
+        );
+
+        dialog.getDialogPane().setContent(contentGrid);
+
+        // Open window, listen for submission validation hooks
+        dialog.showAndWait().ifPresent(response -> {
+            if (response == ButtonType.SAVE) {
+                String uName = editName.getText().trim();
+                String uLoc = editLocation.getText().trim();
+                String uDate = (editDatePicker.getValue() != null) ? editDatePicker.getValue().toString() : event.date;
+                String uTime = comboHour.getValue() + ":" + comboMinute.getValue() + " " + comboMarker.getValue();
+                int uReminder = checkReminder.isSelected() ? 1 : 0;
+
+                if (!uName.isEmpty()) {
+                    String updateSql = "UPDATE timeline_events SET title=?, event_date=?, event_time=?, location=?, reminder=? WHERE id=?";
+                    try (Connection conn = DriverManager.getConnection(DB_URL);
+                         PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                        
+                        pstmt.setString(1, uName);
+                        pstmt.setString(2, uDate);
+                        pstmt.setString(3, uTime);
+                        pstmt.setString(4, uLoc);
+                        pstmt.setInt(5, uReminder);
+                        pstmt.setInt(6, event.id); // Reference unique primary identity key
+                        pstmt.executeUpdate();
+
+                        // Force canvas loop matrix to rerender interface items instantly
+                        showTimelinePage();
+
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                    }
+                }
+            }
+        });
+    }
+
+    // --- PAGE 2: Add Event Form Context ---
     private void showAddEventPage() {
         VBox formContainer = new VBox(12);
         formContainer.setPadding(new Insets(30));
