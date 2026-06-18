@@ -13,7 +13,6 @@ import javafx.scene.shape.Line;
 import atlantafx.base.theme.PrimerDark;
 import org.kordamp.ikonli.javafx.FontIcon;
 import org.kordamp.ikonli.material2.Material2AL;
-import org.kordamp.ikonli.material2.Material2MZ;
 
 import java.awt.SystemTray;
 import java.awt.TrayIcon;
@@ -155,7 +154,7 @@ public class MainApp extends Application {
 
             // Trash Can Icon Delete Button
             Button btnDelete = new Button();
-            FontIcon deleteIcon = new FontIcon(Material2MZ.DELETE_OUTLINE);
+            FontIcon deleteIcon = new FontIcon(Material2AL.DELETE);
             deleteIcon.setIconColor(javafx.scene.paint.Color.web("#f85149")); // Nice clean red color accent
             btnDelete.setGraphic(deleteIcon);
             btnDelete.getStyleClass().addAll("button-icon", "flat");
