@@ -24,10 +24,16 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.PreparedStatement;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class MainApp extends Application {
 
@@ -37,7 +43,9 @@ public class MainApp extends Application {
     private VBox timelineContainer;
     private ScrollPane scrollPane;
     
-    // Track row UI nodes by their unique database event ID to calculate scroll targets
+    // Global tracking references
+    private TrayIcon trayIcon;
+    private ScheduledExecutorService reminderScheduler;
     private Map<Integer, GridPane> eventNodeMap = new HashMap<>();
 
     @Override
@@ -74,7 +82,19 @@ public class MainApp extends Application {
             primaryStage.hide();
         });
 
+        // Initialize System Tray Engine
         javax.swing.SwingUtilities.invokeLater(() -> createTrayIcon(primaryStage));
+
+        // Start Background Clock thread to check reminders every 60 seconds
+        startReminderEngine();
+    }
+
+    @Override
+    public void stop() {
+        // Clean shutdown of thread pools on application termination
+        if (reminderScheduler != null && !reminderScheduler.isShutdown()) {
+            reminderScheduler.shutdownNow();
+        }
     }
 
     private HBox buildNavigationBar() {
@@ -98,16 +118,66 @@ public class MainApp extends Application {
         return navBar;
     }
 
-    // --- PAGE 1: Vertical Timeline with Focal Auto-Scroll Search ---
+    // --- NEW: THE BACKGROUND REMINDER TICK ENGINE ---
+    private void startReminderEngine() {
+        reminderScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "TimeLiner-ClockTracker");
+            t.setDaemon(true);
+            return t;
+        });
+
+        reminderScheduler.scheduleAtFixedRate(() -> {
+            try {
+                String currentDate = LocalDate.now().toString(); // YYYY-MM-DD
+                
+                // CRITICAL FIX: Explicitly enforce the US Locale formatting standard 
+                // This forces Java to output "09:44 PM" even if your Windows OS is displaying "21:44"
+                DateTimeFormatter strict12HourPattern = DateTimeFormatter.ofPattern("hh:mm a", java.util.Locale.US);
+                String currentTime = LocalTime.now().format(strict12HourPattern); 
+
+                // Debug print lines so you can track matching strings in your VS Code terminal panel
+                System.out.println("[Scheduler Heartbeat] Checking DB for Date: " + currentDate + " | Time: " + currentTime);
+
+                String sql = "SELECT * FROM timeline_events WHERE event_date = ? AND event_time = ? AND reminder = 1";
+                
+                try (Connection conn = DriverManager.getConnection(DB_URL);
+                     PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    
+                    pstmt.setString(1, currentDate);
+                    pstmt.setString(2, currentTime);
+                    
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        while (rs.next()) {
+                            String title = rs.getString("title");
+                            String location = rs.getString("location");
+
+                            System.out.println("🎯 Match Found! Launching alert for: " + title);
+
+                            if (trayIcon != null) {
+                                trayIcon.displayMessage(
+                                    "🚨 TimeLiner Alert: " + title,
+                                    "Happening right now at " + location,
+                                    TrayIcon.MessageType.INFO
+                                );
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }, 0, 60, TimeUnit.SECONDS);
+    }
+
+    // --- PAGE 1: Vertical Timeline View ---
     private void showTimelinePage() {
-        eventNodeMap.clear(); // Clear indices on redraw
+        eventNodeMap.clear(); 
         
         BorderPane timelineLayout = new BorderPane();
         timelineLayout.setStyle("-fx-background-color: #0d1117;");
 
         List<TimelineEvent> events = loadEventsFromDb();
 
-        // --- SEARCH HEADER UTILITY STRIP ---
         HBox searchStrip = new HBox(10);
         searchStrip.setPadding(new Insets(15, 20, 15, 20));
         searchStrip.setStyle("-fx-background-color: #0d1117; -fx-border-color: #30363d; -fx-border-width: 0 0 1 0;");
@@ -230,12 +300,10 @@ public class MainApp extends Application {
             
             rowGrid.add(centralDot, 1, 0);
             
-            // Index the node row mapping for scrolling target lookup calculations
             eventNodeMap.put(event.id, rowGrid);
             timelineContainer.getChildren().add(rowGrid);
         }
 
-        // --- WIRE UP SEARCH AUTO-SCROLL LOGIC TRIGGER ON ENTER ---
         txtSearch.setOnAction(e -> {
             String query = txtSearch.getText().trim().toLowerCase();
             if (query.isEmpty()) return;
@@ -244,18 +312,16 @@ public class MainApp extends Application {
                 if (ev.title.toLowerCase().contains(query)) {
                     GridPane targetNode = eventNodeMap.get(ev.id);
                     if (targetNode != null) {
-                        // Calculate target y positioning inside container bounds
                         double totalContentHeight = timelineContainer.getBoundsInLocal().getHeight();
                         double nodeY = targetNode.getBoundsInParent().getMinY();
                         double viewportHeight = scrollPane.getViewportBounds().getHeight();
 
                         if (totalContentHeight > viewportHeight) {
-                            // Map the layout location pixels directly onto the 0.0 - 1.0 vertical scale
                             double scrollPosition = nodeY / (totalContentHeight - viewportHeight);
                             scrollPane.setVvalue(Math.min(1.0, Math.max(0.0, scrollPosition)));
                         }
                     }
-                    break; // Break loop on first structural match match found
+                    break; 
                 }
             }
         });
@@ -354,6 +420,11 @@ public class MainApp extends Application {
                 pstmt.setString(4, location.isEmpty() ? "Remote Context" : location);
                 pstmt.setInt(5, reminder);
                 pstmt.executeUpdate();
+
+                // Immediate validation confirmation bubble
+                if (reminder == 1 && trayIcon != null) {
+                    trayIcon.displayMessage("Reminder Configured", "Tracking alert armed for " + name, TrayIcon.MessageType.INFO);
+                }
 
                 showTimelinePage();
 
@@ -511,7 +582,15 @@ public class MainApp extends Application {
         if (!SystemTray.isSupported()) return;
         try {
             SystemTray tray = SystemTray.getSystemTray();
-            Image image = Toolkit.getDefaultToolkit().createImage(new byte[0]);
+            
+            var iconResource = getClass().getResource("/com/timeliner/icon.png");
+            java.awt.Image image;
+            if (iconResource != null) {
+                image = Toolkit.getDefaultToolkit().getImage(iconResource);
+            } else {
+                image = Toolkit.getDefaultToolkit().createImage(new byte[0]);
+            }
+
             java.awt.PopupMenu popup = new java.awt.PopupMenu();
             
             java.awt.MenuItem openItem = new java.awt.MenuItem("Open TimeLiner");
@@ -527,10 +606,12 @@ public class MainApp extends Application {
             popup.addSeparator();
             popup.add(exitItem);
 
-            TrayIcon trayIcon = new TrayIcon(image, "TimeLiner", popup);
+            trayIcon = new TrayIcon(image, "TimeLiner", popup);
             trayIcon.setImageAutoSize(true);
             trayIcon.addActionListener(e -> Platform.runLater(primaryStage::show));
+            
             tray.add(trayIcon);
+
         } catch (Exception e) {
             e.printStackTrace();
         }
