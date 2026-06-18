@@ -25,7 +25,9 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.PreparedStatement;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class MainApp extends Application {
 
@@ -34,6 +36,9 @@ public class MainApp extends Application {
     private BorderPane mainRoot;
     private VBox timelineContainer;
     private ScrollPane scrollPane;
+    
+    // Track row UI nodes by their unique database event ID to calculate scroll targets
+    private Map<Integer, GridPane> eventNodeMap = new HashMap<>();
 
     @Override
     public void start(Stage primaryStage) {
@@ -93,21 +98,40 @@ public class MainApp extends Application {
         return navBar;
     }
 
-    // --- PAGE 1: Vertical Timeline with Edit & Delete Bindings ---
+    // --- PAGE 1: Vertical Timeline with Focal Auto-Scroll Search ---
     private void showTimelinePage() {
+        eventNodeMap.clear(); // Clear indices on redraw
+        
+        BorderPane timelineLayout = new BorderPane();
+        timelineLayout.setStyle("-fx-background-color: #0d1117;");
+
+        List<TimelineEvent> events = loadEventsFromDb();
+
+        // --- SEARCH HEADER UTILITY STRIP ---
+        HBox searchStrip = new HBox(10);
+        searchStrip.setPadding(new Insets(15, 20, 15, 20));
+        searchStrip.setStyle("-fx-background-color: #0d1117; -fx-border-color: #30363d; -fx-border-width: 0 0 1 0;");
+        searchStrip.setAlignment(Pos.CENTER);
+
+        TextField txtSearch = new TextField();
+        txtSearch.setPromptText("🔍 Search event title and press Enter to snap-focus...");
+        txtSearch.setPrefWidth(450);
+        
+        searchStrip.getChildren().add(txtSearch);
+        timelineLayout.setTop(searchStrip);
+
         StackPane canvasStack = new StackPane();
-        canvasStack.setStyle("-fx-background-color: #0d1117; -fx-padding: 50 20 50 20;");
+        canvasStack.setStyle("-fx-background-color: #0d1117; -fx-padding: 30 20 50 20;");
 
         timelineContainer = new VBox(0);
         timelineContainer.setAlignment(Pos.TOP_CENTER);
-
-        List<TimelineEvent> events = loadEventsFromDb();
 
         if (events.isEmpty()) {
             Label noEventsLayers = new Label("No timeline data found. Go to 'Add Event' to plot milestones.");
             noEventsLayers.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 15px;");
             canvasStack.getChildren().add(noEventsLayers);
-            mainRoot.setCenter(canvasStack);
+            timelineLayout.setCenter(canvasStack);
+            mainRoot.setCenter(timelineLayout);
             return;
         }
 
@@ -139,35 +163,33 @@ public class MainApp extends Application {
             
             rowGrid.getColumnConstraints().addAll(leftCol, centerCol, rightCol);
 
-            // Construct Card Title
+            HBox cardHeader = new HBox(10);
+            cardHeader.setAlignment(Pos.CENTER_LEFT);
+            cardHeader.setPadding(new Insets(0, 0, 4, 0));
+            
             Label title = new Label(event.title);
             title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #58a6ff;");
             title.setWrapText(true);
             HBox.setHgrow(title, Priority.ALWAYS);
-            title.setAlignment(Pos.CENTER_LEFT);
 
-            // Pencil Icon Edit Button
             Button btnEdit = new Button();
             btnEdit.setGraphic(new FontIcon(Material2AL.EDIT));
             btnEdit.getStyleClass().addAll("button-icon", "flat");
             btnEdit.setTooltip(new Tooltip("Edit Event Details"));
             btnEdit.setOnAction(e -> showEditPopup(event));
 
-            // Trash Can Icon Delete Button
             Button btnDelete = new Button();
             FontIcon deleteIcon = new FontIcon(Material2AL.DELETE);
-            deleteIcon.setIconColor(javafx.scene.paint.Color.web("#f85149")); // Nice clean red color accent
+            deleteIcon.setIconColor(javafx.scene.paint.Color.web("#f85149"));
             btnDelete.setGraphic(deleteIcon);
             btnDelete.getStyleClass().addAll("button-icon", "flat");
             btnDelete.setTooltip(new Tooltip("Delete Event"));
             btnDelete.setOnAction(e -> confirmAndExecuteDelete(event));
 
-            // Action Cluster Holder Group
-            HBox actionCluster = new HBox(2, btnEdit, btnDelete);
-            actionCluster.setAlignment(Pos.TOP_RIGHT);
+            HBox actionCluster = new HBox(4, btnEdit, btnDelete);
+            actionCluster.setAlignment(Pos.CENTER_RIGHT);
 
-            HBox cardHeader = new HBox(10, title, actionCluster);
-            cardHeader.setAlignment(Pos.CENTER_LEFT);
+            cardHeader.getChildren().addAll(title, actionCluster);
 
             VBox infoCard = new VBox(6);
             infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 12 15 15 15; -fx-background-radius: 6; " +
@@ -207,21 +229,147 @@ public class MainApp extends Application {
             }
             
             rowGrid.add(centralDot, 1, 0);
+            
+            // Index the node row mapping for scrolling target lookup calculations
+            eventNodeMap.put(event.id, rowGrid);
             timelineContainer.getChildren().add(rowGrid);
         }
 
+        // --- WIRE UP SEARCH AUTO-SCROLL LOGIC TRIGGER ON ENTER ---
+        txtSearch.setOnAction(e -> {
+            String query = txtSearch.getText().trim().toLowerCase();
+            if (query.isEmpty()) return;
+
+            for (TimelineEvent ev : events) {
+                if (ev.title.toLowerCase().contains(query)) {
+                    GridPane targetNode = eventNodeMap.get(ev.id);
+                    if (targetNode != null) {
+                        // Calculate target y positioning inside container bounds
+                        double totalContentHeight = timelineContainer.getBoundsInLocal().getHeight();
+                        double nodeY = targetNode.getBoundsInParent().getMinY();
+                        double viewportHeight = scrollPane.getViewportBounds().getHeight();
+
+                        if (totalContentHeight > viewportHeight) {
+                            // Map the layout location pixels directly onto the 0.0 - 1.0 vertical scale
+                            double scrollPosition = nodeY / (totalContentHeight - viewportHeight);
+                            scrollPane.setVvalue(Math.min(1.0, Math.max(0.0, scrollPosition)));
+                        }
+                    }
+                    break; // Break loop on first structural match match found
+                }
+            }
+        });
+
         canvasStack.getChildren().add(timelineContainer);
         scrollPane.setContent(canvasStack);
-        mainRoot.setCenter(scrollPane);
+        timelineLayout.setCenter(scrollPane);
+        mainRoot.setCenter(timelineLayout);
     }
 
-    // --- DELETE ROUTINE PROCESSOR ---
+    // --- PAGE 2: Add Event Form Context ---
+    private void showAddEventPage() {
+        VBox formContainer = new VBox(12);
+        formContainer.setPadding(new Insets(30));
+        formContainer.setStyle("-fx-background-color: #0d1117;");
+        formContainer.setMaxWidth(460);
+
+        Label pageTitle = new Label("Add Event Block Context");
+        pageTitle.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: #f0f6fc; -fx-padding: 0 0 10 0;");
+
+        TextField txtName = new TextField();
+        txtName.setPromptText("Enter event title...");
+
+        TextField txtLocation = new TextField();
+        txtLocation.setPromptText("Enter location or link...");
+
+        DatePicker datePicker = new DatePicker();
+        datePicker.setMaxWidth(Double.MAX_VALUE);
+
+        HBox timeInputRow = new HBox(8);
+        timeInputRow.setAlignment(Pos.CENTER_LEFT);
+
+        ComboBox<String> comboHour = new ComboBox<>();
+        for (int i = 1; i <= 12; i++) comboHour.getItems().add(String.format("%02d", i));
+        comboHour.setValue("12");
+
+        ComboBox<String> comboMinute = new ComboBox<>();
+        for (int i = 0; i < 60; i++) comboMinute.getItems().add(String.format("%02d", i));
+        comboMinute.setValue("00");
+
+        ComboBox<String> comboMarker = new ComboBox<>();
+        comboMarker.getItems().addAll("AM", "PM");
+        comboMarker.setValue("PM");
+
+        timeInputRow.getChildren().addAll(comboHour, new Label(":"), comboMinute, comboMarker);
+
+        ToggleButton toggleReminder = new ToggleButton("Enable App Alerts");
+        toggleReminder.setMaxWidth(Double.MAX_VALUE);
+
+        Button btnSubmit = new Button("Commit to Line System Track");
+        btnSubmit.getStyleClass().add("success");
+        btnSubmit.setMaxWidth(Double.MAX_VALUE);
+        btnSubmit.setPadding(new Insets(10));
+
+        formContainer.getChildren().addAll(
+            pageTitle,
+            new Label("Event Summary Label:"), txtName,
+            new Label("Location Context:"), txtLocation,
+            new Label("Target Date:"), datePicker,
+            new Label("Target Time (HH:MM AM/PM):"), timeInputRow,
+            new Label("System Notification Options:"), toggleReminder,
+            new BorderPane(null, null, null, null, btnSubmit)
+        );
+
+        StackPane centerWrapper = new StackPane(formContainer);
+        centerWrapper.setStyle("-fx-background-color: #0d1117; -fx-padding: 20 0 20 0;");
+        centerWrapper.setAlignment(Pos.TOP_CENTER);
+
+        ScrollPane formScrollPane = new ScrollPane(centerWrapper);
+        formScrollPane.setPannable(true);
+        formScrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        formScrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        formScrollPane.setFitToWidth(true);
+        formScrollPane.setStyle("-fx-background-color: #0d1117; -fx-background-insets: 0; -fx-padding: 0;");
+
+        btnSubmit.setOnAction(e -> {
+            String name = txtName.getText().trim();
+            String location = txtLocation.getText().trim();
+            String date = (datePicker.getValue() != null) ? datePicker.getValue().toString() : "";
+            String compositeTime = comboHour.getValue() + ":" + comboMinute.getValue() + " " + comboMarker.getValue();
+            int reminder = toggleReminder.isSelected() ? 1 : 0;
+
+            if (name.isEmpty() || date.isEmpty()) {
+                Alert alert = new Alert(Alert.AlertType.WARNING, "Core metadata attributes cannot be empty!", ButtonType.OK);
+                alert.showAndWait();
+                return;
+            }
+
+            String sql = "INSERT INTO timeline_events(title, event_date, event_time, location, reminder) VALUES(?,?,?,?,?)";
+            try (Connection conn = DriverManager.getConnection(DB_URL);
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                
+                pstmt.setString(1, name);
+                pstmt.setString(2, date);
+                pstmt.setString(3, compositeTime);
+                pstmt.setString(4, location.isEmpty() ? "Remote Context" : location);
+                pstmt.setInt(5, reminder);
+                pstmt.executeUpdate();
+
+                showTimelinePage();
+
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        });
+
+        mainRoot.setCenter(formScrollPane);
+    }
+
     private void confirmAndExecuteDelete(TimelineEvent event) {
         Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION);
         confirmAlert.setTitle("Delete Event Permanently");
         confirmAlert.setHeaderText("Remove: " + event.title);
         confirmAlert.setContentText("Are you absolutely sure you want to drop this milestone from your track? This action cannot be reversed.");
-        
         confirmAlert.getDialogPane().setStyle("-fx-background-color: #161b22;");
 
         confirmAlert.showAndWait().ifPresent(response -> {
@@ -233,7 +381,6 @@ public class MainApp extends Application {
                     pstmt.setInt(1, event.id);
                     pstmt.executeUpdate();
 
-                    // Rerender layout canvas context
                     showTimelinePage();
 
                 } catch (Exception ex) {
@@ -243,7 +390,6 @@ public class MainApp extends Application {
         });
     }
 
-    // --- POPUP DIALOG WINDOW MODULE ---
     private void showEditPopup(TimelineEvent event) {
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle("Modify Event Frame");
@@ -321,98 +467,6 @@ public class MainApp extends Application {
                 }
             }
         });
-    }
-
-    // --- PAGE 2: Add Event Form Context ---
-    private void showAddEventPage() {
-        VBox formContainer = new VBox(12);
-        formContainer.setPadding(new Insets(30));
-        formContainer.setStyle("-fx-background-color: #0d1117;");
-        formContainer.setMaxWidth(460);
-
-        Label pageTitle = new Label("Add Event Block Context");
-        pageTitle.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: #f0f6fc; -fx-padding: 0 0 10 0;");
-
-        TextField txtName = new TextField();
-        txtName.setPromptText("Enter event title...");
-
-        TextField txtLocation = new TextField();
-        txtLocation.setPromptText("Enter location or link...");
-
-        DatePicker datePicker = new DatePicker();
-        datePicker.setMaxWidth(Double.MAX_VALUE);
-
-        HBox timeInputRow = new HBox(8);
-        timeInputRow.setAlignment(Pos.CENTER_LEFT);
-
-        ComboBox<String> comboHour = new ComboBox<>();
-        for (int i = 1; i <= 12; i++) comboHour.getItems().add(String.format("%02d", i));
-        comboHour.setValue("12");
-
-        ComboBox<String> comboMinute = new ComboBox<>();
-        for (int i = 0; i < 60; i++) comboMinute.getItems().add(String.format("%02d", i));
-        comboMinute.setValue("00");
-
-        ComboBox<String> comboMarker = new ComboBox<>();
-        comboMarker.getItems().addAll("AM", "PM");
-        comboMarker.setValue("PM");
-
-        timeInputRow.getChildren().addAll(
-            comboHour, new Label(":"), comboMinute, comboMarker
-        );
-
-        ToggleButton toggleReminder = new ToggleButton("Enable App Alerts");
-        toggleReminder.setMaxWidth(Double.MAX_VALUE);
-
-        Button btnSubmit = new Button("Commit to Line System Track");
-        btnSubmit.getStyleClass().add("success");
-        btnSubmit.setMaxWidth(Double.MAX_VALUE);
-        btnSubmit.setPadding(new Insets(10));
-
-        formContainer.getChildren().addAll(
-            pageTitle,
-            new Label("Event Summary Label:"), txtName,
-            new Label("Location Context:"), txtLocation,
-            new Label("Target Date:"), datePicker,
-            new Label("Target Time (HH:MM AM/PM):"), timeInputRow,
-            new Label("System Notification Options:"), toggleReminder,
-            new BorderPane(null, null, null, null, btnSubmit)
-        );
-
-        btnSubmit.setOnAction(e -> {
-            String name = txtName.getText().trim();
-            String location = txtLocation.getText().trim();
-            String date = (datePicker.getValue() != null) ? datePicker.getValue().toString() : "";
-            String compositeTime = comboHour.getValue() + ":" + comboMinute.getValue() + " " + comboMarker.getValue();
-            int reminder = toggleReminder.isSelected() ? 1 : 0;
-
-            if (name.isEmpty() || date.isEmpty()) {
-                Alert alert = new Alert(Alert.AlertType.WARNING, "Core metadata attributes cannot be empty!", ButtonType.OK);
-                alert.showAndWait();
-                return;
-            }
-
-            String sql = "INSERT INTO timeline_events(title, event_date, event_time, location, reminder) VALUES(?,?,?,?,?)";
-            try (Connection conn = DriverManager.getConnection(DB_URL);
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                
-                pstmt.setString(1, name);
-                pstmt.setString(2, date);
-                pstmt.setString(3, compositeTime);
-                pstmt.setString(4, location.isEmpty() ? "Remote Context" : location);
-                pstmt.setInt(5, reminder);
-                pstmt.executeUpdate();
-
-                showTimelinePage();
-
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-        });
-
-        StackPane centerWrapper = new StackPane(formContainer);
-        centerWrapper.setStyle("-fx-background-color: #0d1117;");
-        mainRoot.setCenter(centerWrapper);
     }
 
     private List<TimelineEvent> loadEventsFromDb() {
