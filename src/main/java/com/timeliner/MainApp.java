@@ -13,6 +13,7 @@ import javafx.scene.shape.Line;
 import atlantafx.base.theme.PrimerDark;
 import org.kordamp.ikonli.javafx.FontIcon;
 import org.kordamp.ikonli.material2.Material2AL;
+import org.kordamp.ikonli.material2.Material2MZ;
 
 import java.awt.SystemTray;
 import java.awt.TrayIcon;
@@ -93,7 +94,7 @@ public class MainApp extends Application {
         return navBar;
     }
 
-    // --- PAGE 1: Vertical Timeline with Edit Bindings ---
+    // --- PAGE 1: Vertical Timeline with Edit & Delete Bindings ---
     private void showTimelinePage() {
         StackPane canvasStack = new StackPane();
         canvasStack.setStyle("-fx-background-color: #0d1117; -fx-padding: 50 20 50 20;");
@@ -139,23 +140,34 @@ public class MainApp extends Application {
             
             rowGrid.getColumnConstraints().addAll(leftCol, centerCol, rightCol);
 
-            // Construct Card Top Row Header (Title + Edit Action Button)
-            HBox cardHeader = new HBox(10);
-            cardHeader.setAlignment(Pos.TOP_LEFT);
-            
+            // Construct Card Title
             Label title = new Label(event.title);
             title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #58a6ff;");
             title.setWrapText(true);
             HBox.setHgrow(title, Priority.ALWAYS);
 
-            // Vector Pencil Icon Button via Ikonli
+            // Pencil Icon Edit Button
             Button btnEdit = new Button();
             btnEdit.setGraphic(new FontIcon(Material2AL.EDIT));
-            btnEdit.getStyleClass().addAll("button-icon", "flat"); // clean frameless styling rule
+            btnEdit.getStyleClass().addAll("button-icon", "flat");
             btnEdit.setTooltip(new Tooltip("Edit Event Details"));
             btnEdit.setOnAction(e -> showEditPopup(event));
 
-            cardHeader.getChildren().addAll(title, btnEdit);
+            // Trash Can Icon Delete Button
+            Button btnDelete = new Button();
+            FontIcon deleteIcon = new FontIcon(Material2MZ.DELETE_OUTLINE);
+            deleteIcon.setIconColor(javafx.scene.paint.Color.web("#f85149")); // Nice clean red color accent
+            btnDelete.setGraphic(deleteIcon);
+            btnDelete.getStyleClass().addAll("button-icon", "flat");
+            btnDelete.setTooltip(new Tooltip("Delete Event"));
+            btnDelete.setOnAction(e -> confirmAndExecuteDelete(event));
+
+            // Action Cluster Holder Group
+            HBox actionCluster = new HBox(2, btnEdit, btnDelete);
+            actionCluster.setAlignment(Pos.TOP_RIGHT);
+
+            HBox cardHeader = new HBox(10, title, actionCluster);
+            cardHeader.setAlignment(Pos.TOP_LEFT);
 
             VBox infoCard = new VBox(6);
             infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 12 15 15 15; -fx-background-radius: 6; " +
@@ -203,13 +215,40 @@ public class MainApp extends Application {
         mainRoot.setCenter(scrollPane);
     }
 
+    // --- DELETE ROUTINE PROCESSOR ---
+    private void confirmAndExecuteDelete(TimelineEvent event) {
+        Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmAlert.setTitle("Delete Event Permanently");
+        confirmAlert.setHeaderText("Remove: " + event.title);
+        confirmAlert.setContentText("Are you absolutely sure you want to drop this milestone from your track? This action cannot be reversed.");
+        
+        confirmAlert.getDialogPane().setStyle("-fx-background-color: #161b22;");
+
+        confirmAlert.showAndWait().ifPresent(response -> {
+            if (response == ButtonType.OK) {
+                String deleteSql = "DELETE FROM timeline_events WHERE id=?";
+                try (Connection conn = DriverManager.getConnection(DB_URL);
+                     PreparedStatement pstmt = conn.prepareStatement(deleteSql)) {
+                    
+                    pstmt.setInt(1, event.id);
+                    pstmt.executeUpdate();
+
+                    // Rerender layout canvas context
+                    showTimelinePage();
+
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+        });
+    }
+
     // --- POPUP DIALOG WINDOW MODULE ---
     private void showEditPopup(TimelineEvent event) {
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle("Modify Event Frame");
         dialog.setHeaderText("Edit details for: " + event.title);
         
-        // Wire up default theme canvas buttons natively
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.APPLY, ButtonType.CANCEL);
         dialog.getDialogPane().setStyle("-fx-background-color: #161b22;");
 
@@ -223,8 +262,7 @@ public class MainApp extends Application {
         DatePicker editDatePicker = new DatePicker(java.time.LocalDate.parse(event.date));
         editDatePicker.setMaxWidth(Double.MAX_VALUE);
 
-        // Parse previous record back into dropdown layouts naturally
-        String[] timeParts = event.time.split("[: ]"); // splits hh, mm, marker bounds
+        String[] timeParts = event.time.split("[: ]");
         
         ComboBox<String> comboHour = new ComboBox<>();
         for (int i = 1; i <= 12; i++) comboHour.getItems().add(String.format("%02d", i));
@@ -254,7 +292,6 @@ public class MainApp extends Application {
 
         dialog.getDialogPane().setContent(contentGrid);
 
-        // Open window, listen for submission validation hooks
         dialog.showAndWait().ifPresent(response -> {
             if (response == ButtonType.APPLY) {
                 String uName = editName.getText().trim();
@@ -273,10 +310,9 @@ public class MainApp extends Application {
                         pstmt.setString(3, uTime);
                         pstmt.setString(4, uLoc);
                         pstmt.setInt(5, uReminder);
-                        pstmt.setInt(6, event.id); // Reference unique primary identity key
+                        pstmt.setInt(6, event.id);
                         pstmt.executeUpdate();
 
-                        // Force canvas loop matrix to rerender interface items instantly
                         showTimelinePage();
 
                     } catch (Exception ex) {
