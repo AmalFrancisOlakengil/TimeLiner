@@ -24,16 +24,10 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.PreparedStatement;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 public class MainApp extends Application {
 
@@ -43,9 +37,7 @@ public class MainApp extends Application {
     private VBox timelineContainer;
     private ScrollPane scrollPane;
     
-    // Global tracking references
-    private TrayIcon trayIcon;
-    private ScheduledExecutorService reminderScheduler;
+    // Track row UI nodes by their unique database event ID to calculate scroll targets
     private Map<Integer, GridPane> eventNodeMap = new HashMap<>();
 
     @Override
@@ -75,6 +67,17 @@ public class MainApp extends Application {
 
         primaryStage.setTitle("TimeLiner Management");
         primaryStage.setScene(scene);
+
+        // ====================================================================
+        // SET WINDOW ICON CAPABILITY
+        // This swaps out the default Java coffee cup icon on the Windows Taskbar
+        // ====================================================================
+        var windowIconResource = getClass().getResource("/com/timeliner/icon.png");
+        if (windowIconResource != null) {
+            primaryStage.getIcons().add(new javafx.scene.image.Image(windowIconResource.toExternalForm()));
+        }
+        // ====================================================================
+
         primaryStage.show();
 
         primaryStage.setOnCloseRequest(event -> {
@@ -82,19 +85,7 @@ public class MainApp extends Application {
             primaryStage.hide();
         });
 
-        // Initialize System Tray Engine
         javax.swing.SwingUtilities.invokeLater(() -> createTrayIcon(primaryStage));
-
-        // Start Background Clock thread to check reminders every 60 seconds
-        startReminderEngine();
-    }
-
-    @Override
-    public void stop() {
-        // Clean shutdown of thread pools on application termination
-        if (reminderScheduler != null && !reminderScheduler.isShutdown()) {
-            reminderScheduler.shutdownNow();
-        }
     }
 
     private HBox buildNavigationBar() {
@@ -118,57 +109,6 @@ public class MainApp extends Application {
         return navBar;
     }
 
-    // --- NEW: THE BACKGROUND REMINDER TICK ENGINE ---
-    private void startReminderEngine() {
-        reminderScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "TimeLiner-ClockTracker");
-            t.setDaemon(true);
-            return t;
-        });
-
-        reminderScheduler.scheduleAtFixedRate(() -> {
-            try {
-                String currentDate = LocalDate.now().toString(); // YYYY-MM-DD
-                
-                // CRITICAL FIX: Explicitly enforce the US Locale formatting standard 
-                // This forces Java to output "09:44 PM" even if your Windows OS is displaying "21:44"
-                DateTimeFormatter strict12HourPattern = DateTimeFormatter.ofPattern("hh:mm a", java.util.Locale.US);
-                String currentTime = LocalTime.now().format(strict12HourPattern); 
-
-                // Debug print lines so you can track matching strings in your VS Code terminal panel
-                System.out.println("[Scheduler Heartbeat] Checking DB for Date: " + currentDate + " | Time: " + currentTime);
-
-                String sql = "SELECT * FROM timeline_events WHERE event_date = ? AND event_time = ? AND reminder = 1";
-                
-                try (Connection conn = DriverManager.getConnection(DB_URL);
-                     PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                    
-                    pstmt.setString(1, currentDate);
-                    pstmt.setString(2, currentTime);
-                    
-                    try (ResultSet rs = pstmt.executeQuery()) {
-                        while (rs.next()) {
-                            String title = rs.getString("title");
-                            String location = rs.getString("location");
-
-                            System.out.println("🎯 Match Found! Launching alert for: " + title);
-
-                            if (trayIcon != null) {
-                                trayIcon.displayMessage(
-                                    "🚨 TimeLiner Alert: " + title,
-                                    "Happening right now at " + location,
-                                    TrayIcon.MessageType.INFO
-                                );
-                            }
-                        }
-                    }
-                }
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-        }, 0, 60, TimeUnit.SECONDS);
-    }
-
     // --- PAGE 1: Vertical Timeline View ---
     private void showTimelinePage() {
         eventNodeMap.clear(); 
@@ -178,6 +118,7 @@ public class MainApp extends Application {
 
         List<TimelineEvent> events = loadEventsFromDb();
 
+        // Search Header Utility Strip
         HBox searchStrip = new HBox(10);
         searchStrip.setPadding(new Insets(15, 20, 15, 20));
         searchStrip.setStyle("-fx-background-color: #0d1117; -fx-border-color: #30363d; -fx-border-width: 0 0 1 0;");
@@ -205,7 +146,8 @@ public class MainApp extends Application {
             return;
         }
 
-        double runningLineHeight = events.size() * 160.0 + 50;
+        // Expanded vertical spacing buffer to compensate for description sizes smoothly
+        double runningLineHeight = events.size() * 190.0 + 50;
         Line axisSpine = new Line(0, 0, 0, runningLineHeight);
         axisSpine.setStroke(javafx.scene.paint.Color.web("#30363d"));
         axisSpine.setStrokeWidth(4);
@@ -220,7 +162,7 @@ public class MainApp extends Application {
 
             GridPane rowGrid = new GridPane();
             rowGrid.setAlignment(Pos.CENTER);
-            rowGrid.setPrefHeight(160);
+            rowGrid.setPrefHeight(190);
 
             ColumnConstraints leftCol = new ColumnConstraints(350);
             leftCol.setHalignment(javafx.geometry.HPos.RIGHT);
@@ -258,12 +200,11 @@ public class MainApp extends Application {
 
             HBox actionCluster = new HBox(4, btnEdit, btnDelete);
             actionCluster.setAlignment(Pos.CENTER_RIGHT);
-
             cardHeader.getChildren().addAll(title, actionCluster);
 
             VBox infoCard = new VBox(6);
-            infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 12 15 15 15; -fx-background-radius: 6; " +
-                              "-fx-border-color: #30363d; -fx-border-radius: 6; -fx-max-width: 260; -fx-min-width: 260;");
+            infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 12 15 12 15; -fx-background-radius: 6; " +
+                              "-fx-border-color: #30363d; -fx-border-radius: 6; -fx-max-width: 280; -fx-min-width: 280;");
             
             Label loc = new Label("📍 " + event.location);
             loc.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 12px;");
@@ -272,19 +213,20 @@ public class MainApp extends Application {
             Label dt = new Label("📅 " + event.date + " " + event.time);
             dt.setStyle("-fx-text-fill: #c9d1d9; -fx-font-size: 12px;");
 
-            infoCard.getChildren().addAll(cardHeader, loc, dt);
-            if (event.reminder == 1) {
-                Label badge = new Label("🔔 Alert Active");
-                badge.setStyle("-fx-text-fill: #3fb950; -fx-font-size: 10px;");
-                infoCard.getChildren().add(badge);
-            }
+            // Multi-line detailed description layer label setup
+            Label desc = new Label(event.description.isEmpty() ? "No description provided." : event.description);
+            desc.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 12px; -fx-font-style: italic; -fx-padding: 4 0 0 0;");
+            desc.setWrapText(true);
+            desc.setMaxHeight(60);
+
+            infoCard.getChildren().addAll(cardHeader, loc, dt, desc);
 
             Circle centralDot = new Circle(6);
             centralDot.setFill(javafx.scene.paint.Color.web("#f0f6fc"));
             centralDot.setStroke(javafx.scene.paint.Color.web("#58a6ff"));
             centralDot.setStrokeWidth(2);
 
-            Line connectorLine = new Line(0, 0, 40, 0);
+            Line connectorLine = new Line(0, 0, 30, 0);
             connectorLine.setStroke(javafx.scene.paint.Color.web("#8b949e"));
             connectorLine.setStrokeWidth(2);
 
@@ -304,6 +246,7 @@ public class MainApp extends Application {
             timelineContainer.getChildren().add(rowGrid);
         }
 
+        // Wire Up Search Auto-Scroll Logic Trigger on Enter
         txtSearch.setOnAction(e -> {
             String query = txtSearch.getText().trim().toLowerCase();
             if (query.isEmpty()) return;
@@ -368,8 +311,11 @@ public class MainApp extends Application {
 
         timeInputRow.getChildren().addAll(comboHour, new Label(":"), comboMinute, comboMarker);
 
-        ToggleButton toggleReminder = new ToggleButton("Enable App Alerts");
-        toggleReminder.setMaxWidth(Double.MAX_VALUE);
+        // Substituted text area descriptor field block
+        TextArea txtDescription = new TextArea();
+        txtDescription.setPromptText("Enter detailed notes or descriptions here...");
+        txtDescription.setPrefHeight(90);
+        txtDescription.setWrapText(true);
 
         Button btnSubmit = new Button("Commit to Line System Track");
         btnSubmit.getStyleClass().add("success");
@@ -382,7 +328,7 @@ public class MainApp extends Application {
             new Label("Location Context:"), txtLocation,
             new Label("Target Date:"), datePicker,
             new Label("Target Time (HH:MM AM/PM):"), timeInputRow,
-            new Label("System Notification Options:"), toggleReminder,
+            new Label("Detailed Description Notes:"), txtDescription,
             new BorderPane(null, null, null, null, btnSubmit)
         );
 
@@ -402,7 +348,7 @@ public class MainApp extends Application {
             String location = txtLocation.getText().trim();
             String date = (datePicker.getValue() != null) ? datePicker.getValue().toString() : "";
             String compositeTime = comboHour.getValue() + ":" + comboMinute.getValue() + " " + comboMarker.getValue();
-            int reminder = toggleReminder.isSelected() ? 1 : 0;
+            String desc = txtDescription.getText().trim();
 
             if (name.isEmpty() || date.isEmpty()) {
                 Alert alert = new Alert(Alert.AlertType.WARNING, "Core metadata attributes cannot be empty!", ButtonType.OK);
@@ -410,7 +356,7 @@ public class MainApp extends Application {
                 return;
             }
 
-            String sql = "INSERT INTO timeline_events(title, event_date, event_time, location, reminder) VALUES(?,?,?,?,?)";
+            String sql = "INSERT INTO timeline_events(title, event_date, event_time, location, description) VALUES(?,?,?,?,?)";
             try (Connection conn = DriverManager.getConnection(DB_URL);
                  PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 
@@ -418,13 +364,8 @@ public class MainApp extends Application {
                 pstmt.setString(2, date);
                 pstmt.setString(3, compositeTime);
                 pstmt.setString(4, location.isEmpty() ? "Remote Context" : location);
-                pstmt.setInt(5, reminder);
+                pstmt.setString(5, desc);
                 pstmt.executeUpdate();
-
-                // Immediate validation confirmation bubble
-                if (reminder == 1 && trayIcon != null) {
-                    trayIcon.displayMessage("Reminder Configured", "Tracking alert armed for " + name, TrayIcon.MessageType.INFO);
-                }
 
                 showTimelinePage();
 
@@ -471,7 +412,7 @@ public class MainApp extends Application {
 
         VBox contentGrid = new VBox(10);
         contentGrid.setPadding(new Insets(15));
-        contentGrid.setPrefWidth(400);
+        contentGrid.setPrefWidth(420);
 
         TextField editName = new TextField(event.title);
         TextField editLocation = new TextField(event.location);
@@ -496,15 +437,16 @@ public class MainApp extends Application {
         HBox timeRow = new HBox(6, comboHour, new Label(":"), comboMinute, comboMarker);
         timeRow.setAlignment(Pos.CENTER_LEFT);
 
-        CheckBox checkReminder = new CheckBox("Enable Active Desktop Alerts");
-        checkReminder.setSelected(event.reminder == 1);
+        TextArea editDesc = new TextArea(event.description);
+        editDesc.setPrefHeight(80);
+        editDesc.setWrapText(true);
 
         contentGrid.getChildren().addAll(
             new Label("Update Name:"), editName,
             new Label("Update Location:"), editLocation,
             new Label("Change Date:"), editDatePicker,
             new Label("Adjust Time Window:"), timeRow,
-            new Label("Notification Actions:"), checkReminder
+            new Label("Modify Description:"), editDesc
         );
 
         dialog.getDialogPane().setContent(contentGrid);
@@ -515,10 +457,10 @@ public class MainApp extends Application {
                 String uLoc = editLocation.getText().trim();
                 String uDate = (editDatePicker.getValue() != null) ? editDatePicker.getValue().toString() : event.date;
                 String uTime = comboHour.getValue() + ":" + comboMinute.getValue() + " " + comboMarker.getValue();
-                int uReminder = checkReminder.isSelected() ? 1 : 0;
+                String uDesc = editDesc.getText().trim();
 
                 if (!uName.isEmpty()) {
-                    String updateSql = "UPDATE timeline_events SET title=?, event_date=?, event_time=?, location=?, reminder=? WHERE id=?";
+                    String updateSql = "UPDATE timeline_events SET title=?, event_date=?, event_time=?, location=?, description=? WHERE id=?";
                     try (Connection conn = DriverManager.getConnection(DB_URL);
                          PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
                         
@@ -526,7 +468,7 @@ public class MainApp extends Application {
                         pstmt.setString(2, uDate);
                         pstmt.setString(3, uTime);
                         pstmt.setString(4, uLoc);
-                        pstmt.setInt(5, uReminder);
+                        pstmt.setString(5, uDesc);
                         pstmt.setInt(6, event.id);
                         pstmt.executeUpdate();
 
@@ -554,7 +496,7 @@ public class MainApp extends Application {
                     rs.getString("event_date"),
                     rs.getString("event_time"),
                     rs.getString("location"),
-                    rs.getInt("reminder")
+                    rs.getString("description")
                 ));
             }
         } catch (Exception e) {
@@ -572,7 +514,7 @@ public class MainApp extends Application {
                     "event_date TEXT," +
                     "event_time TEXT," +
                     "location TEXT," +
-                    "reminder INTEGER DEFAULT 0)");
+                    "description TEXT)");
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -582,20 +524,12 @@ public class MainApp extends Application {
         if (!SystemTray.isSupported()) return;
         try {
             SystemTray tray = SystemTray.getSystemTray();
-            
             var iconResource = getClass().getResource("/com/timeliner/icon.png");
-            java.awt.Image image;
-            if (iconResource != null) {
-                image = Toolkit.getDefaultToolkit().getImage(iconResource);
-            } else {
-                image = Toolkit.getDefaultToolkit().createImage(new byte[0]);
-            }
+            java.awt.Image image = (iconResource != null) ? Toolkit.getDefaultToolkit().getImage(iconResource) : Toolkit.getDefaultToolkit().createImage(new byte[0]);
 
             java.awt.PopupMenu popup = new java.awt.PopupMenu();
-            
             java.awt.MenuItem openItem = new java.awt.MenuItem("Open TimeLiner");
             openItem.addActionListener(e -> Platform.runLater(primaryStage::show));
-            
             java.awt.MenuItem exitItem = new java.awt.MenuItem("Exit Completely");
             exitItem.addActionListener(e -> {
                 Platform.exit();
@@ -606,12 +540,10 @@ public class MainApp extends Application {
             popup.addSeparator();
             popup.add(exitItem);
 
-            trayIcon = new TrayIcon(image, "TimeLiner", popup);
+            TrayIcon trayIcon = new TrayIcon(image, "TimeLiner", popup);
             trayIcon.setImageAutoSize(true);
             trayIcon.addActionListener(e -> Platform.runLater(primaryStage::show));
-            
             tray.add(trayIcon);
-
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -627,15 +559,15 @@ public class MainApp extends Application {
         String date;
         String time;
         String location;
-        int reminder;
+        String description;
 
-        TimelineEvent(int id, String title, String date, String time, String location, int reminder) {
+        TimelineEvent(int id, String title, String date, String time, String location, String description) {
             this.id = id;
             this.title = title;
             this.date = date;
             this.time = time;
             this.location = location;
-            this.reminder = reminder;
+            this.description = description;
         }
     }
 }
