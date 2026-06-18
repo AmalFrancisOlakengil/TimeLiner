@@ -210,7 +210,7 @@ public class MainApp extends Application {
         dialog.setHeaderText("Edit details for: " + event.title);
         
         // Wire up default theme canvas buttons natively
-        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.SAVE, ButtonType.CANCEL);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.APPLY, ButtonType.CANCEL);
         dialog.getDialogPane().setStyle("-fx-background-color: #161b22;");
 
         VBox contentGrid = new VBox(10);
@@ -256,7 +256,7 @@ public class MainApp extends Application {
 
         // Open window, listen for submission validation hooks
         dialog.showAndWait().ifPresent(response -> {
-            if (response == ButtonType.SAVE) {
+            if (response == ButtonType.APPLY) {
                 String uName = editName.getText().trim();
                 String uLoc = editLocation.getText().trim();
                 String uDate = (editDatePicker.getValue() != null) ? editDatePicker.getValue().toString() : event.date;

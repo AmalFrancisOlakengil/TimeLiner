@@ -11,6 +11,7 @@ module com.timeliner {
     requires atlantafx.base;
     requires org.kordamp.ikonli.core;
     requires org.kordamp.ikonli.javafx;
+    requires org.kordamp.ikonli.material2;
     
     // Open your package so JavaFX can read your classes
     opens com.timeliner to javafx.graphics, javafx.base;
