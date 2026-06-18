@@ -144,6 +144,7 @@ public class MainApp extends Application {
             title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #58a6ff;");
             title.setWrapText(true);
             HBox.setHgrow(title, Priority.ALWAYS);
+            title.setAlignment(Pos.CENTER_LEFT);
 
             // Pencil Icon Edit Button
             Button btnEdit = new Button();
@@ -166,7 +167,7 @@ public class MainApp extends Application {
             actionCluster.setAlignment(Pos.TOP_RIGHT);
 
             HBox cardHeader = new HBox(10, title, actionCluster);
-            cardHeader.setAlignment(Pos.TOP_LEFT);
+            cardHeader.setAlignment(Pos.CENTER_LEFT);
 
             VBox infoCard = new VBox(6);
             infoCard.setStyle("-fx-background-color: #21262d; -fx-padding: 12 15 15 15; -fx-background-radius: 6; " +
