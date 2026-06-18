@@ -2,8 +2,11 @@ module com.timeliner {
     // Require JavaFX modules
     requires javafx.controls;
     
-    // Require your database and ecosystem dependencies
+    // Require core JDK modules
     requires java.sql; 
+    requires java.desktop; // <--- ADD THIS LINE HERE!
+    
+    // Require your database and ecosystem dependencies
     requires org.controlsfx.controls;
     requires atlantafx.base;
     requires org.kordamp.ikonli.core;
