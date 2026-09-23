@@ -77,7 +77,7 @@ public class MainApp extends Application {
             primaryStage.getIcons().add(new javafx.scene.image.Image(windowIconResource.toExternalForm()));
         }
         // ====================================================================
-
+        
         primaryStage.show();
 
         primaryStage.setOnCloseRequest(event -> {
