@@ -6,7 +6,7 @@
     
 <Identity Name="GASS.TimeLinerScheduleEventsinaTimeLine" 
           Publisher="CN=93C777BB-7D35-46D0-A696-DA92A3C84C52" 
-          Version="1.0.0.0" 
+          Version="1.0.2.0" 
           ProcessorArchitecture="x64" />
 
 <Properties>

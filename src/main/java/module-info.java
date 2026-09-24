@@ -3,8 +3,7 @@ module com.timeliner {
     requires javafx.controls;
     
     // Require core JDK modules
-    requires java.sql; 
-    requires java.desktop; // <--- ADD THIS LINE HERE!
+    requires java.sql;
     
     // Require your database and ecosystem dependencies
     requires org.controlsfx.controls;

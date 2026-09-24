@@ -14,11 +14,9 @@ import atlantafx.base.theme.PrimerDark;
 import org.kordamp.ikonli.javafx.FontIcon;
 import org.kordamp.ikonli.material2.Material2AL;
 
-import java.awt.SystemTray;
-import java.awt.TrayIcon;
-import java.awt.Image;
-import java.awt.Toolkit;
-
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -31,7 +29,36 @@ import java.util.Map;
 
 public class MainApp extends Application {
 
-    private static final String DB_URL = "jdbc:sqlite:timeliner.db";
+    private static final String DB_URL = initDbUrl();
+
+    private static String initDbUrl() {
+        String localAppData = System.getenv("LOCALAPPDATA");
+        File appDir;
+        if (localAppData != null && !localAppData.isBlank()) {
+            appDir = new File(localAppData, "TimeLiner");
+        } else {
+            String userHome = System.getProperty("user.home", ".");
+            appDir = new File(userHome, ".timeliner");
+        }
+
+        if (!appDir.exists()) {
+            appDir.mkdirs();
+        }
+
+        File dbFile = new File(appDir, "timeliner.db");
+
+        // Seamless migration: If an existing DB is found in current working directory, copy it over once
+        File legacyDb = new File("timeliner.db");
+        if (legacyDb.exists() && !dbFile.exists()) {
+            try {
+                Files.copy(legacyDb.toPath(), dbFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        return "jdbc:sqlite:" + dbFile.getAbsolutePath();
+    }
     
     private BorderPane mainRoot;
     private VBox timelineContainer;
@@ -43,7 +70,6 @@ public class MainApp extends Application {
     @Override
     public void start(Stage primaryStage) {
         Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());
-        Platform.setImplicitExit(false);
         initDatabase();
 
         mainRoot = new BorderPane();
@@ -79,13 +105,6 @@ public class MainApp extends Application {
         // ====================================================================
         
         primaryStage.show();
-
-        primaryStage.setOnCloseRequest(event -> {
-            event.consume();
-            primaryStage.hide();
-        });
-
-        javax.swing.SwingUtilities.invokeLater(() -> createTrayIcon(primaryStage));
     }
 
     private HBox buildNavigationBar() {
@@ -515,35 +534,6 @@ public class MainApp extends Application {
                     "event_time TEXT," +
                     "location TEXT," +
                     "description TEXT)");
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void createTrayIcon(Stage primaryStage) {
-        if (!SystemTray.isSupported()) return;
-        try {
-            SystemTray tray = SystemTray.getSystemTray();
-            var iconResource = getClass().getResource("/com/timeliner/icon.png");
-            java.awt.Image image = (iconResource != null) ? Toolkit.getDefaultToolkit().getImage(iconResource) : Toolkit.getDefaultToolkit().createImage(new byte[0]);
-
-            java.awt.PopupMenu popup = new java.awt.PopupMenu();
-            java.awt.MenuItem openItem = new java.awt.MenuItem("Open TimeLiner");
-            openItem.addActionListener(e -> Platform.runLater(primaryStage::show));
-            java.awt.MenuItem exitItem = new java.awt.MenuItem("Exit Completely");
-            exitItem.addActionListener(e -> {
-                Platform.exit();
-                System.exit(0);
-            });
-
-            popup.add(openItem);
-            popup.addSeparator();
-            popup.add(exitItem);
-
-            TrayIcon trayIcon = new TrayIcon(image, "TimeLiner", popup);
-            trayIcon.setImageAutoSize(true);
-            trayIcon.addActionListener(e -> Platform.runLater(primaryStage::show));
-            tray.add(trayIcon);
         } catch (Exception e) {
             e.printStackTrace();
         }
